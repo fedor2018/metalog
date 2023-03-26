@@ -476,7 +476,10 @@ static void setprogname(const char * const title)
 
 static int getDataSources(int sockets[])
 {
-    struct sockaddr_un sa;
+    struct sockaddr_un sa, sin;
+   	int port=514;
+	char*hostname="localhost";
+    struct hostent * host;
 #ifdef HAVE_KLOGCTL
     int fdpipe[2];
     pid_t pgid;
@@ -509,13 +512,34 @@ static int getDataSources(int sockets[])
             return -4;
         }
     }
+// udp
+    if ((sockets[1] = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        warnp("Unable to create a inet socket");
+        return -1;
+    }
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons( (short) port);//514
+	if (inet_aton(hostname,(struct in_addr*)&sin.sin_addr.s_addr)==0){
+		host=gethostbyname(hostname);
+		if (host->h_addr==NULL)
+			warnp("Error in inet_aton");
+		else
+			sin.sin_addr.s_addr=*((int*)host->h_addr);
+	}
+    if (bind(sockets[1], (struct sockaddr *) &sin, (socklen_t) sizeof sin) < 0) {
+        warnp("Unable to bind a inet socket");
+        close(sockets[1]);
+        return -1;
+    }
+    sockets[2] = -1;
 
+//klog
     if (!do_kernel_log) {
         /*
          * This will avoid reading from the kernel socket in the process()
          * function, which only takes into account valid descriptors.
          */
-        sockets[1] = -1;
+        sockets[2] = -1;
         return 0;
     }
 
@@ -523,13 +547,13 @@ static int getDataSources(int sockets[])
     /* larger buffers compared to a pipe() */
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fdpipe) < 0) {
         warnp("Unable to create a pipe");
-        close(sockets[0]);
+        close(sockets[2]);
         return -3;
     }
     pgid = getpgrp();
     if ((child = fork()) < (pid_t) 0) {
         warnp("Unable to create the klogd child");
-        close(sockets[0]);
+        close(sockets[2]);
         return -3;
     } else if (child == (pid_t) 0) {
         char line[LINE_MAX];
@@ -570,7 +594,7 @@ static int getDataSources(int sockets[])
 
         return 0;
     }
-    sockets[1] = fdpipe[0];
+    sockets[2] = fdpipe[0];
 #else                                  /* !HAVE_KLOGCTL */
     {
         int klogfd;
@@ -578,7 +602,7 @@ static int getDataSources(int sockets[])
         if ((klogfd = open(KLOG_FILE, O_RDONLY)) < 0) {
             return 0;                  /* non-fatal */
         }
-        sockets[1] = klogfd;
+        sockets[2] = klogfd;
     }
 #endif
 
@@ -1744,7 +1768,7 @@ static void checkRoot(void)
 
 int main(int argc, char *argv[])
 {
-    int sockets[2];
+    int sockets[3];
 
     remote_host.port = DEFAULT_UPD_PORT;
     remote_host.sock = -1;
